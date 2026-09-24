@@ -1,0 +1,37 @@
+[
+  {
+    "id": "query-expansion",
+    "name": "Query Expansion",
+    "category": "retrieval",
+    "description": "Generates multiple reformulations or hypothetical answers for a query to widen retrieval recall before ranking results.",
+    "frameworks": ["LlamaIndex QueryFusionRetriever", "LangChain MultiQueryRetriever"]
+  },
+  {
+    "id": "reranking",
+    "name": "Reranking",
+    "category": "retrieval",
+    "description": "Re-scores an initial candidate set with a cross-encoder or LLM judge to push the most relevant chunks to the top before generation.",
+    "frameworks": ["LlamaIndex SentenceTransformerRerank", "LlamaIndex LLMRerank", "Cohere Rerank"]
+  },
+  {
+    "id": "recursive-retrieval",
+    "name": "Recursive Retrieval",
+    "category": "retrieval",
+    "description": "Uses a hierarchy of summary and child nodes so retrieval first narrows to the right document, then drills into the right section.",
+    "frameworks": ["LlamaIndex RecursiveRetriever"]
+  },
+  {
+    "id": "rag-agent",
+    "name": "RAG Agent",
+    "category": "orchestration",
+    "description": "Wraps one or more retrievers as tools an LLM agent can call autonomously while reasoning over multiple steps.",
+    "frameworks": ["LangChain create_react_agent", "LlamaIndex ReActAgent / FunctionAgent"]
+  },
+  {
+    "id": "rag-evaluation",
+    "name": "RAG Evaluation",
+    "category": "evaluation",
+    "description": "Scores retrieval quality (hit rate, MRR) and generation quality (faithfulness, answer relevance, context precision) automatically.",
+    "frameworks": ["LangSmith evaluate()", "RAGAS"]
+  }
+]

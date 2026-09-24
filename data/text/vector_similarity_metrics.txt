@@ -1,0 +1,26 @@
+Vector Similarity Metrics for RAG Indexes
+===========================================
+
+Cosine similarity measures the cosine of the angle between two vectors,
+ignoring their magnitude. It is the most common metric for text embeddings
+because sentence embedding models are usually trained with cosine-based
+contrastive losses. A cosine similarity of 1.0 means the vectors point in
+the same direction; 0.0 means they are orthogonal (unrelated).
+
+Dot product similarity is the raw inner product of two vectors. Unlike
+cosine similarity it is sensitive to vector magnitude, so it rewards longer
+vectors. It is cheaper to compute than cosine similarity (no normalization
+step) and is the natural choice when embeddings are already L2-normalized,
+in which case dot product and cosine similarity produce identical rankings.
+
+Euclidean (L2) distance measures the straight-line distance between two
+points in vector space. Smaller distances mean more similar vectors. L2
+distance is sensitive to both the direction and the magnitude of vectors,
+and is commonly used in classic nearest-neighbor search and clustering
+algorithms such as k-means and Annoy/Faiss L2 indexes.
+
+Choosing a metric affects retrieval ranking, especially when embedding
+magnitudes vary across documents (e.g. short vs. long chunks). In practice
+cosine similarity is the safest default for text; dot product is preferred
+for maximum inner product search (MIPS) at scale; and Euclidean distance is
+common in image and audio embedding spaces.

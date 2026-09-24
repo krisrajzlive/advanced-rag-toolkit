@@ -1,0 +1,37 @@
+Retrieval-Augmented Generation (RAG) Overview
+==============================================
+
+Retrieval-Augmented Generation (RAG) is a technique that combines a retrieval
+system with a generative language model. Instead of relying solely on the
+knowledge baked into a model's weights at training time, RAG retrieves
+relevant passages from an external knowledge base at query time and passes
+them to the language model as context. This grounds the model's answers in
+up-to-date, verifiable source material and reduces hallucination.
+
+A typical RAG pipeline has three stages:
+
+1. Indexing - documents are split into chunks, embedded into vectors using an
+   embedding model, and stored in a vector index (or vector store).
+2. Retrieval - given a user query, the query is embedded with the same model
+   and the index is searched for the most similar chunks, using a distance
+   metric such as cosine similarity, dot product, or Euclidean (L2) distance.
+3. Generation - the retrieved chunks are injected into the prompt sent to the
+   LLM, which synthesizes a final answer grounded in the retrieved context.
+
+Advanced RAG techniques improve on this naive pipeline:
+
+- Query expansion generates multiple reformulations of the user's question
+  (or hypothetical answers, as in HyDE) to widen retrieval recall.
+- Reranking uses a cross-encoder or LLM to re-score retrieved candidates by
+  relevance before they are passed to the generator, improving precision.
+- Recursive retrieval organizes documents hierarchically (e.g. summary nodes
+  that link to detailed child chunks) so that retrieval can first find the
+  right document and then drill down into the right section.
+- RAG agents wrap the retriever as a callable tool that an LLM-driven agent
+  can invoke autonomously, combining retrieval with multi-step reasoning,
+  tool use, and iterative query refinement.
+
+Evaluating RAG systems typically covers both retrieval quality (e.g.
+precision, recall, hit rate) and generation quality (e.g. faithfulness,
+answer relevance, context precision), which can be automated with LLM judges
+via frameworks such as LangSmith evaluation or RAGAS.

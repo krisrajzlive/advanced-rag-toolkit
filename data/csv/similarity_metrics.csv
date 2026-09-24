@@ -1,0 +1,4 @@
+metric,formula,range,normalization_required,typical_use_case
+cosine,"dot(a,b) / (norm(a) * norm(b))","[-1, 1]",no,"text embeddings (sentence-transformers, OpenAI, HF)"
+dot_product,"dot(a,b)","(-inf, inf)","yes (for ranking to match cosine)","MIPS at scale, pre-normalized embeddings"
+euclidean,"sqrt(sum((a_i - b_i)^2))","[0, inf)",no,"image/audio embeddings, k-means clustering, Faiss L2 index"

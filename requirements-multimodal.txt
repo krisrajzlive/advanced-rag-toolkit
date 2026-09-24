@@ -1,0 +1,13 @@
+# Optional, heavier dependencies for fully-local multimodal RAG.
+# Not required by default: src/loaders/image_loader.py and
+# src/loaders/audio_video_loader.py fall back to the free Hugging Face
+# Inference API (HUGGINGFACE_API_KEY) when these packages are absent.
+
+llama-index-embeddings-clip
+torch
+transformers
+sentencepiece
+Pillow
+openai-whisper
+pydub
+moviepy

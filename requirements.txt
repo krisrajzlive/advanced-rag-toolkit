@@ -1,0 +1,30 @@
+# Core LlamaIndex
+llama-index-core>=0.11.0
+llama-index-readers-file>=0.2.0
+
+# LlamaIndex model integrations (all free-tier friendly)
+llama-index-llms-openai
+llama-index-llms-openai-like
+llama-index-embeddings-openai
+llama-index-embeddings-huggingface-api
+
+# LangChain (for the LangChain-side RAG agent + evaluation demos)
+langchain>=0.3.0
+langchain-openai
+langchain-huggingface
+langchain-community
+langsmith
+
+# Document parsing
+pypdf
+pandas
+
+# Utilities
+python-dotenv
+huggingface_hub
+pytest
+
+# Optional (large) deps for local multimodal embeddings — install separately
+# with `pip install -r requirements-multimodal.txt` if you want fully local
+# CLIP image embeddings and local Whisper transcription instead of the
+# Hugging Face Inference API used by default.
