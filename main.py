@@ -8,6 +8,15 @@
     python main.py agent-llamaindex "<query>"
     python main.py agent-langchain "<query>"
     python main.py evaluate
+    python main.py normalize-demo           # raw vs L2-normalized embeddings
+    python main.py quant-bench              # Qdrant scalar/binary/product quantization
+    python main.py hnsw-bench               # Qdrant HNSW m / ef sweep
+    python main.py tenant-demo "<query>"    # Keycloak JWT -> tenant-isolated retrieval
+    python main.py kg-build                 # extract knowledge graph into Neo4j
+    python main.py kg-show                  # print graph stats + triples
+    python main.py graph-rag "<query>"      # Graph RAG answer
+    python main.py graph-vs-vector "<query>"  # Graph RAG vs plain vector RAG
+    python main.py recall [ann|retrieval|all] # recall measurement + tuning
 
 See README.md for setup and a description of each demo.
 """
@@ -155,7 +164,121 @@ def cmd_evaluate(_args: argparse.Namespace) -> None:
     print(results)
 
 
+def cmd_normalize_demo(_args: argparse.Namespace) -> None:
+    from src.indexing.normalization import compare_normalization
+
+    queries = [
+        "What is cosine similarity?",
+        "Which metric is magnitude-sensitive?",
+        "How does reranking work?",
+        "What is recursive retrieval?",
+    ]
+    docs = load_all_documents_light()
+    for label, stats in compare_normalization(docs, queries).items():
+        print(f"{label}: {stats}")
+
+
+def load_all_documents_light():
+    """text + json + csv only (skips the 154-page PDF, images, audio)."""
+    from src.loaders import load_csv, load_json, load_text
+
+    return load_text(DATA_DIR / "text") + load_json(DATA_DIR / "json") + load_csv(DATA_DIR / "csv")
+
+
+def cmd_quant_bench(_args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from src.indexing.qdrant_store import get_qdrant_client
+    from src.indexing.quantization import benchmark_quantization
+
+    print(pd.DataFrame(benchmark_quantization(get_qdrant_client())).to_string(index=False))
+
+
+def cmd_hnsw_bench(_args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from src.indexing.hnsw import benchmark_hnsw
+    from src.indexing.qdrant_store import get_qdrant_client
+
+    print(pd.DataFrame(benchmark_hnsw(get_qdrant_client())).to_string(index=False))
+
+
+def cmd_tenant_demo(args: argparse.Namespace) -> None:
+    from src.config import configure_llamaindex_settings
+    from src.tenancy import (
+        build_tenant_index,
+        get_access_token,
+        tenant_retriever,
+        verify_token,
+    )
+
+    configure_llamaindex_settings(normalize=True)
+    index = build_tenant_index(DATA_DIR / "tenants", normalized=True)
+    for username in ("alice", "bob", "carol"):
+        ctx = verify_token(get_access_token(username))
+        print(f"\n{ctx.username} (tenants: {', '.join(ctx.tenants)})")
+        for n in tenant_retriever(index, ctx).retrieve(args.query):
+            snippet = n.node.get_content()[:90].replace("\n", " ")
+            print(f"  [{n.node.metadata['tenant_id']:6s} {n.score:.3f}] {snippet}")
+
+
+def cmd_kg_build(_args: argparse.Namespace) -> None:
+    from src.graph import build_knowledge_graph, get_graph_store, graph_stats
+
+    build_knowledge_graph(DATA_DIR / "graph")
+    print(graph_stats(get_graph_store()))
+
+
+def cmd_kg_show(_args: argparse.Namespace) -> None:
+    from src.graph import get_graph_store, graph_stats, list_triples
+
+    store = get_graph_store()
+    print(graph_stats(store))
+    for s, p, o in list_triples(store, limit=80):
+        print(f"  ({s}) -[{p}]-> ({o})")
+    print("\nBrowse it: http://localhost:7475")
+
+
+def cmd_graph_rag(args: argparse.Namespace) -> None:
+    from src.graph import build_graph_rag_query_engine, load_knowledge_graph
+
+    print(build_graph_rag_query_engine(load_knowledge_graph()).query(args.query))
+
+
+def cmd_graph_vs_vector(args: argparse.Namespace) -> None:
+    from llama_index.core import SimpleDirectoryReader
+
+    from src.graph import (
+        build_graph_rag_query_engine,
+        build_plain_rag_query_engine,
+        load_knowledge_graph,
+    )
+
+    docs = SimpleDirectoryReader(str(DATA_DIR / "graph")).load_data()
+    print("=== Plain vector RAG ===")
+    print(build_plain_rag_query_engine(docs).query(args.query))
+    print("\n=== Graph RAG ===")
+    print(build_graph_rag_query_engine(load_knowledge_graph()).query(args.query))
+
+
+def cmd_recall(args: argparse.Namespace) -> None:
+    import subprocess
+
+    mode = args.query if args.query in ("ann", "retrieval", "all") else "all"
+    script = Path(__file__).parent / "scripts" / "tune_recall.py"
+    subprocess.run([sys.executable, str(script), mode], check=True)
+
+
 COMMANDS = {
+    "normalize-demo": (cmd_normalize_demo, False),
+    "quant-bench": (cmd_quant_bench, False),
+    "hnsw-bench": (cmd_hnsw_bench, False),
+    "tenant-demo": (cmd_tenant_demo, True),
+    "kg-build": (cmd_kg_build, False),
+    "kg-show": (cmd_kg_show, False),
+    "graph-rag": (cmd_graph_rag, True),
+    "graph-vs-vector": (cmd_graph_vs_vector, True),
+    "recall": (cmd_recall, False),
     "load-all": (cmd_load_all, False),
     "compare-metrics": (cmd_compare_metrics, True),
     "query-expansion": (cmd_query_expansion, True),

@@ -1,0 +1,39 @@
+# Local infrastructure for the advanced RAG demos.
+#   docker compose up -d
+# Host ports are deliberately non-default (7475/7688/8081) so they don't clash
+# with other Neo4j / Keycloak containers on the same machine.
+name: advanced-rag
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.1
+    ports: ["6333:6333", "6334:6334"]
+    volumes: [qdrant_data:/qdrant/storage]
+
+  neo4j:
+    image: neo4j:5.24-community
+    ports: ["7475:7474", "7688:7687"]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+    volumes: [neo4j_data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p $${NEO4J_AUTH#neo4j/} 'RETURN 1' || exit 1"]
+      interval: 10s
+      retries: 12
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: ["start-dev", "--import-realm"]
+    ports: ["8081:8080"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
+      RAG_DEMO_PASSWORD: ${RAG_DEMO_PASSWORD:?set RAG_DEMO_PASSWORD in .env}
+    volumes:
+      - ./docker/keycloak/rag-realm.json:/opt/keycloak/data/import/rag-realm.json:ro
+
+volumes:
+  qdrant_data:
+  neo4j_data:

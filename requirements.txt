@@ -28,3 +28,10 @@ pytest
 # with `pip install -r requirements-multimodal.txt` if you want fully local
 # CLIP image embeddings and local Whisper transcription instead of the
 # Hugging Face Inference API used by default.
+
+# Qdrant (HNSW + quantization + multi-tenancy), Neo4j (Graph RAG), Keycloak JWT auth
+qdrant-client
+llama-index-vector-stores-qdrant
+llama-index-graph-stores-neo4j
+neo4j
+PyJWT[crypto]

@@ -26,6 +26,8 @@ wires those functions together; it should stay thin.
   Hugging Face Inference API calls in `src/loaders/image_loader.py` and
   `audio_video_loader.py`) when there's no reasonably-light native option,
   and keep it wrapped so it still returns plain `Document` objects.
+- **Quantization and HNSW are Qdrant-native only** (`src/indexing/quantization.py`, `hnsw.py` pass Qdrant config objects). Do not hand-write quantization or ANN-index algorithms.
+- Tenant identity comes only from a verified Keycloak JWT (`src/tenancy/auth.py`), never from caller-supplied values.
 - Every loader returns `list[llama_index.core.schema.Document]` and tags
   `metadata["modality"]`. Keep that contract when adding a new loader so it
   composes with the rest of the pipeline unmodified.

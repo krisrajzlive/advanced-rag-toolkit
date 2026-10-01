@@ -1,0 +1,4 @@
+Acme Corp internal handbook (CONFIDENTIAL - Acme only).
+Acme's flagship product is the Roadrunner anvil-delivery platform. The Roadrunner support escalation code is ACME-RR-7741.
+Acme's refund policy: customers may return unused anvils within 45 days for a full refund.
+The Acme on-call rotation is owned by the Platform Reliability team, led by Wile Coyote.

@@ -32,7 +32,13 @@ OLLAMA_CLOUD_BASE = "https://ollama.com/v1"
 
 
 def get_llm_provider() -> str:
-    """Pick the first available free-tier provider: huggingface > ollama > openai."""
+    """Pick the first available free-tier provider: huggingface > ollama > openai.
+
+    `RAG_LLM_PROVIDER` forces a specific one.
+    """
+    forced = os.environ.get("RAG_LLM_PROVIDER")
+    if forced:
+        return forced
     if os.environ.get("HUGGINGFACE_API_KEY"):
         return "huggingface"
     if os.environ.get("OLLAMA_API_KEY"):
@@ -83,8 +89,11 @@ def get_llamaindex_llm(provider: str | None = None):
 
 
 @lru_cache(maxsize=None)
-def get_llamaindex_embed_model(provider: str | None = None):
+def get_llamaindex_embed_model(provider: str | None = None, normalize: bool = False):
     """Return a llama_index embedding model for the given provider.
+
+    With `normalize=True` the model is wrapped so every vector it returns is
+    L2-normalized (unit length) - see `src/indexing/normalization.py`.
 
     Prefers OpenAI when `OPENAI_API_KEY` is set: `HuggingFaceInferenceAPIEmbedding`
     opens a brand-new asyncio event loop per embedding batch
@@ -94,6 +103,13 @@ def get_llamaindex_embed_model(provider: str | None = None):
     closed" once more than a handful of nodes are embedded. OpenAI's
     embedding client is a plain synchronous HTTP call with no such issue.
     """
+    if normalize:
+        from src.indexing.normalization import L2NormalizedEmbedding
+
+        return L2NormalizedEmbedding(
+            inner=get_llamaindex_embed_model(provider, normalize=False)
+        )
+
     provider = provider or get_llm_provider()
 
     if os.environ.get("OPENAI_API_KEY"):
@@ -116,12 +132,14 @@ def get_llamaindex_embed_model(provider: str | None = None):
     )
 
 
-def configure_llamaindex_settings(provider: str | None = None) -> None:
+def configure_llamaindex_settings(
+    provider: str | None = None, normalize: bool = False
+) -> None:
     """Wire up llama_index's global `Settings` with our LLM + embed model."""
     from llama_index.core import Settings
 
     Settings.llm = get_llamaindex_llm(provider)
-    Settings.embed_model = get_llamaindex_embed_model(provider)
+    Settings.embed_model = get_llamaindex_embed_model(provider, normalize=normalize)
 
 
 # --------------------------------------------------------------------------

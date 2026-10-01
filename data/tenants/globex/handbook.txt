@@ -1,0 +1,4 @@
+Globex Corporation internal handbook (CONFIDENTIAL - Globex only).
+Globex's flagship product is the Doomsday Insights analytics suite. The Doomsday support escalation code is GLX-DD-2290.
+Globex's refund policy: subscriptions can be cancelled within 14 days for a prorated refund.
+The Globex on-call rotation is owned by the Data Platform team, led by Hank Scorpio.

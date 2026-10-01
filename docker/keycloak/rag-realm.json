@@ -1,0 +1,60 @@
+{
+  "realm": "rag",
+  "enabled": true,
+  "sslRequired": "none",
+  "groups": [{ "name": "acme" }, { "name": "globex" }],
+  "clients": [
+    {
+      "clientId": "rag-api",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "tenant-groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "rag-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "rag-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice", "enabled": true, "emailVerified": true,
+      "email": "alice@acme.test", "firstName": "Alice", "lastName": "Acme",
+      "groups": ["acme"],
+      "credentials": [{ "type": "password", "value": "${RAG_DEMO_PASSWORD}", "temporary": false }]
+    },
+    {
+      "username": "bob", "enabled": true, "emailVerified": true,
+      "email": "bob@globex.test", "firstName": "Bob", "lastName": "Globex",
+      "groups": ["globex"],
+      "credentials": [{ "type": "password", "value": "${RAG_DEMO_PASSWORD}", "temporary": false }]
+    },
+    {
+      "username": "carol", "enabled": true, "emailVerified": true,
+      "email": "carol@both.test", "firstName": "Carol", "lastName": "Both",
+      "groups": ["acme", "globex"],
+      "credentials": [{ "type": "password", "value": "${RAG_DEMO_PASSWORD}", "temporary": false }]
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+Globex Corporation 2027 roadmap (CONFIDENTIAL - Globex only).
+Q2: ship Doomsday Insights 5 with natural-language dashboards.
+Q4: expand the Springfield data centre and adopt customer-managed encryption keys.
+Globex plans to add role-based access control to its retrieval-augmented generation assistant in Q2.

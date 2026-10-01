@@ -58,10 +58,14 @@ Face Inference API automatically — no code changes needed.
 src/
   config.py          # provider-agnostic LLM/embedding setup (LlamaIndex + LangChain)
   loaders/            # one loader per modality -> list[Document]
-  indexing/            # native cosine / dot_product / euclidean retrieval
+  indexing/            # cosine/dot/euclidean retrieval, L2 normalization, Qdrant store, quantization, HNSW
   retrieval/           # query expansion, reranking, recursive retrieval
   agents/              # LlamaIndex ReActAgent + LangChain/LangGraph agent
-  evaluation/           # LangSmith evaluate() over a small QA dataset
+  evaluation/           # LangSmith evaluate() + recall measurement/tuning
+  tenancy/              # Keycloak JWT verification + tenant-filtered retrieval
+  graph/                # Neo4j knowledge graph + Graph RAG
+scripts/                # download_anthropic_pdf.py, tune_recall.py
+docker/ + docker-compose.yml  # Qdrant, Neo4j, Keycloak (realm import)
 ```
 
 Every loader returns plain `llama_index.core.schema.Document` objects, so
@@ -124,6 +128,33 @@ python main.py agent-langchain "What similarity metric is magnitude-sensitive?"
 python main.py evaluate
 ```
 
+The Qdrant / Neo4j / Keycloak commands are listed in the reference table below.
+
+## Scripts and commands reference
+
+Every demo is a `python main.py <command> "<query>"` command; two helper scripts live in `scripts/`.
+
+| Command / script | What it does | Needs |
+|---|---|---|
+| `main.py load-all` | Loads every modality (text, JSON, CSV, PDF, image, audio/video) and prints per-modality document counts | - |
+| `main.py compare-metrics "<q>"` | Same query under cosine / dot product / Euclidean retrieval | embeddings |
+| `main.py query-expansion "<q>"` | LLM-generated query variants fused with reciprocal rank fusion | LLM |
+| `main.py rerank "<q>"` | Wide retrieval, then LLM reranking, then answer | LLM |
+| `main.py recursive "<q>"` | Summary nodes that link to per-document chunk retrievers | LLM |
+| `main.py agent-llamaindex "<q>"` / `agent-langchain "<q>"` | RAG agent in LlamaIndex / LangChain-LangGraph | LLM |
+| `main.py evaluate` | LangSmith evaluation (context recall + LLM judge) | LangSmith key |
+| `main.py normalize-demo` | Raw vs L2-normalized embeddings: vector norms and metric ranking agreement | embeddings |
+| `main.py quant-bench` | Qdrant scalar / binary / product quantization: recall@10 and latency vs exact search | Docker (Qdrant) |
+| `main.py hnsw-bench` | Qdrant HNSW `m` / `ef_construct` / `hnsw_ef` sweep vs exact search | Docker (Qdrant) |
+| `main.py tenant-demo "<q>"` | Logs in alice, bob and carol via Keycloak, verifies each JWT, and runs tenant-isolated retrieval | Docker (Qdrant, Keycloak) |
+| `main.py kg-build` | Extracts a knowledge graph from `data/graph/` into Neo4j (resets the graph first) | Docker (Neo4j), LLM |
+| `main.py kg-show` | Prints graph stats and the entity-to-entity triples | Docker (Neo4j) |
+| `main.py graph-rag "<q>"` | Graph RAG answer (graph retrieval over Neo4j) | Docker (Neo4j), LLM |
+| `main.py graph-vs-vector "<q>"` | Plain vector RAG vs Graph RAG on the same question | Docker (Neo4j), LLM |
+| `main.py recall [ann\|retrieval\|all]` | Runs `scripts/tune_recall.py` (below) | Docker (Qdrant), LLM for `retrieval` |
+| `scripts/tune_recall.py ann\|retrieval\|all` | Measures recall and recommends settings. `ann`: sweeps quantization / rescoring / `hnsw_ef` against exact search and picks the fastest config reaching `--target` (default 0.95; also `--n`, `--dim`). `retrieval`: compares top-k, smaller chunks, query expansion and LLM rerank on 10 labelled questions | Docker (Qdrant) |
+| `scripts/download_anthropic_pdf.py` | Downloads the Anthropic threat-report PDF into `data/pdf/` | internet |
+
 ## Tests
 
 ```bash
@@ -138,3 +169,37 @@ python -m pytest tests/ -q
   fallback model 404s, swap the model id in `src/loaders/image_loader.py`
   or `src/loaders/audio_video_loader.py`, or install
   `requirements-multimodal.txt` to run fully local instead.
+
+## Advanced vector infrastructure (Docker)
+
+```bash
+docker compose up -d     # Qdrant :6333, Neo4j :7475/:7688, Keycloak :8081
+```
+
+Set `NEO4J_PASSWORD`, `KEYCLOAK_ADMIN_PASSWORD` and `RAG_DEMO_PASSWORD` in
+`.env` first (see `.env.example`). Host ports are non-default so they don't
+collide with other Neo4j/Keycloak containers. **No local Ollama is used**:
+LLMs come from the cloud providers above and embeddings from OpenAI.
+
+| Feature | Where | How it works |
+|---|---|---|
+| **L2 normalization** | `src/indexing/normalization.py`, `get_llamaindex_embed_model(normalize=True)` | `L2NormalizedEmbedding` wraps any embed model and rescales vectors to unit length; dot == cosine, Euclidean ranks identically. `python main.py normalize-demo`. Note OpenAI vectors are already ~unit length, so the demo is only a visible change for providers that return raw vectors; `tests/test_normalization.py` proves the effect on un-normalized vectors. |
+| **Quantization** | `src/indexing/quantization.py` | Qdrant-native scalar (int8), binary and product quantization, with oversampling + rescoring at query time. No custom algorithm - only Qdrant config objects. `python main.py quant-bench` |
+| **HNSW** | `src/indexing/hnsw.py` | Qdrant's HNSW index configured via `m`, `ef_construct`, `hnsw_ef`. `python main.py hnsw-bench` |
+| **Multi-tenancy** | `src/tenancy/`, `docker/keycloak/rag-realm.json` | One Qdrant collection, `tenant_id` payload with an `is_tenant` index and per-tenant HNSW graphs. Keycloak (realm `rag`, users `alice`/acme, `bob`/globex, `carol`/both) issues JWTs; the tenant comes only from the *verified* token's `groups` claim and becomes a mandatory retrieval filter. `python main.py tenant-demo "What is the refund policy?"` |
+| **Knowledge graph** | `src/graph/knowledge_graph.py` | LLM triple extraction (`SimpleLLMPathExtractor`) into Neo4j via `PropertyGraphIndex`; browse at http://localhost:7475. `python main.py kg-build`, `kg-show` |
+| **Graph RAG** | `src/graph/graph_rag.py` | `VectorContextRetriever` + `LLMSynonymRetriever` walk 2 relationship hops. `python main.py graph-rag "<q>"`, `graph-vs-vector "<q>"` |
+| **Recall tuning** | `scripts/tune_recall.py`, `src/evaluation/recall.py` | `ann`: recall@10 vs exact search over quantization/rescore/`hnsw_ef`, recommends the fastest config reaching `--target`. `retrieval`: end-to-end recall on 10 labelled questions comparing top-k, smaller chunks, query expansion, LLM rerank. `python main.py recall all` |
+
+Measured on this machine (20k synthetic 1536-d vectors, recall@10 vs exact):
+scalar+rescore 1.00, binary+rescore 0.998, product+rescore 0.988; without
+rescoring scalar 0.93, binary 0.26, product 0.23. HNSW reached ~0.99+ recall
+even at `hnsw_ef=8` on this easy synthetic data. On the labelled retrieval set
+(real text + the 154-page PDF as distractors) baseline top-2 recall was 0.9
+and none of the tried strategies improved on it - the single miss is a heavily
+paraphrased question; smaller chunks and LLM reranking were slightly worse.
+Treat these as indicative, not general benchmarks.
+
+Graph RAG limitation: the demo corpus (`data/graph/`) is tiny, so plain vector
+RAG answers its questions equally well; Graph RAG's multi-hop advantage needs a
+larger corpus. The graph is global (not tenant-scoped).

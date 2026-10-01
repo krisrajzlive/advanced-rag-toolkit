@@ -1,0 +1,4 @@
+Acme Corp 2027 roadmap (CONFIDENTIAL - Acme only).
+Q1: launch Roadrunner v2 with drone-based anvil delivery.
+Q3: open a second fulfilment centre in Rotterdam.
+Acme plans to migrate its vector search from a single-node index to a sharded cluster in Q4.
