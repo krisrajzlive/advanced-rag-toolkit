@@ -269,7 +269,92 @@ def cmd_recall(args: argparse.Namespace) -> None:
     subprocess.run([sys.executable, str(script), mode], check=True)
 
 
+def cmd_sync(_args: argparse.Namespace) -> None:
+    from src.cdc import sync_directory
+    from src.config import configure_llamaindex_settings
+
+    configure_llamaindex_settings(normalize=True)
+    result = sync_directory(DATA_DIR / "tenants")
+    print(f"unchanged: {result['unchanged']}")
+    for key in ("new", "changed", "deleted"):
+        print(f"{key}: {result[key] or '-'}")
+
+
+def cmd_cdc_setup(_args: argparse.Namespace) -> None:
+    from src.cdc.debezium import register_connector
+    from src.cdc.source_db import setup_source
+
+    setup_source()
+    print("Postgres table ready; Debezium connector state:", register_connector())
+
+
+def cmd_cdc_consume(args: argparse.Namespace) -> None:
+    from src.cdc.consumer import consume, open_index
+    from src.config import configure_llamaindex_settings
+
+    configure_llamaindex_settings(normalize=True)
+    idle = float(args.query) if args.query.replace(".", "").isdigit() else 30.0
+    print(f"Consuming change events (exits after {idle:.0f}s idle)...")
+    for line in consume(open_index(), idle_timeout=idle):
+        print("  ", line)
+
+
+def cmd_cdc_demo(_args: argparse.Namespace) -> None:
+    import time
+
+    from src.cdc import source_db
+    from src.cdc.consumer import COLLECTION, consume, open_index
+    from src.cdc.debezium import register_connector
+    from src.config import configure_llamaindex_settings
+    from src.indexing.qdrant_store import get_qdrant_client
+    from src.tenancy import TenantContext
+    from src.tenancy.tenant_rag import tenant_retriever
+
+    configure_llamaindex_settings(normalize=True)
+    source_db.setup_source(seed=False)
+    print("Connector:", register_connector())
+    index = open_index()
+    # Self-contained: this run creates (and finally removes) its own rows.
+    esc_id = source_db.insert_doc("acme", "Roadrunner escalation", "The Roadrunner support escalation code is ACME-RR-7741.")
+    refund_id = source_db.insert_doc("globex", "Doomsday refunds", "Globex subscriptions can be cancelled within 14 days for a prorated refund.")
+
+    def drain(title: str, idle: float) -> None:
+        print(f"\n== {title}")
+        for line in consume(index, idle_timeout=idle):
+            print("  ", line)
+
+    def show(tenant: str, question: str) -> None:
+        nodes = tenant_retriever(index, TenantContext("demo", (tenant,)), 1).retrieve(question)
+        text = nodes[0].node.get_content().replace("\n", " ")[:100] if nodes else "(nothing)"
+        print(f"  [{tenant}] {question!r} -> {text}")
+
+    client = get_qdrant_client()
+    drain("existing rows / new rows arrive as events", idle=20)
+    show("acme", "What is the Roadrunner escalation code?")
+    show("globex", "What is the refund policy?")
+    print("  points in Qdrant:", client.count(COLLECTION, exact=True).count)
+
+    print("\n== applying changes in Postgres (INSERT / UPDATE / DELETE)")
+    plan_id = source_db.insert_doc("acme", "Acme Q4 plan", "Acme will migrate vector search to a sharded cluster in Q4.")
+    source_db.update_doc(esc_id, "The Roadrunner support escalation code is now ACME-RR-9999.")
+    source_db.delete_doc(refund_id)
+    time.sleep(2)
+    drain("change events streamed by Debezium", idle=20)
+
+    print("\n== retrieval after CDC")
+    show("acme", "What is the Roadrunner escalation code?")
+    show("acme", "What is planned for Q4?")
+    show("globex", "What is the refund policy?")
+    print("  points in Qdrant:", client.count(COLLECTION, exact=True).count)
+    for row_id in (esc_id, plan_id):  # tidy up; Qdrant catches up on the next run
+        source_db.delete_doc(row_id)
+
+
 COMMANDS = {
+    "sync": (cmd_sync, False),
+    "cdc-setup": (cmd_cdc_setup, False),
+    "cdc-consume": (cmd_cdc_consume, False),
+    "cdc-demo": (cmd_cdc_demo, False),
     "normalize-demo": (cmd_normalize_demo, False),
     "quant-bench": (cmd_quant_bench, False),
     "hnsw-bench": (cmd_hnsw_bench, False),

@@ -35,3 +35,7 @@ llama-index-vector-stores-qdrant
 llama-index-graph-stores-neo4j
 neo4j
 PyJWT[crypto]
+
+# CDC: Debezium/Kafka consumer + Postgres source
+confluent-kafka
+psycopg[binary]

@@ -62,6 +62,7 @@ src/
   retrieval/           # query expansion, reranking, recursive retrieval
   agents/              # LlamaIndex ReActAgent + LangChain/LangGraph agent
   evaluation/           # LangSmith evaluate() + recall measurement/tuning
+  cdc/                  # IngestionPipeline sync + Postgres/Debezium/Kafka CDC consumer
   tenancy/              # Keycloak JWT verification + tenant-filtered retrieval
   graph/                # Neo4j knowledge graph + Graph RAG
 scripts/                # download_anthropic_pdf.py, tune_recall.py
@@ -152,6 +153,10 @@ Every demo is a `python main.py <command> "<query>"` command; two helper scripts
 | `main.py graph-rag "<q>"` | Graph RAG answer (graph retrieval over Neo4j) | Docker (Neo4j), LLM |
 | `main.py graph-vs-vector "<q>"` | Plain vector RAG vs Graph RAG on the same question | Docker (Neo4j), LLM |
 | `main.py recall [ann\|retrieval\|all]` | Runs `scripts/tune_recall.py` (below) | Docker (Qdrant), LLM for `retrieval` |
+| `main.py sync` | Hash-based incremental sync of `data/tenants/` into Qdrant (`IngestionPipeline` + docstore): new / changed / unchanged / deleted documents. State in `.cdc_state/` | Docker (Qdrant), embeddings |
+| `main.py cdc-setup` | Creates the Postgres `documents` table and registers the Debezium connector | Docker `--profile cdc` |
+| `main.py cdc-consume [idle_seconds]` | Kafka consumer applying Debezium change events to Qdrant until idle | Docker `--profile cdc` |
+| `main.py cdc-demo` | End to end: INSERT / UPDATE / DELETE in Postgres, then shows the change reflected in tenant-filtered retrieval | Docker `--profile cdc` |
 | `scripts/tune_recall.py ann\|retrieval\|all` | Measures recall and recommends settings. `ann`: sweeps quantization / rescoring / `hnsw_ef` against exact search and picks the fastest config reaching `--target` (default 0.95; also `--n`, `--dim`). `retrieval`: compares top-k, smaller chunks, query expansion and LLM rerank on 10 labelled questions | Docker (Qdrant) |
 | `scripts/download_anthropic_pdf.py` | Downloads the Anthropic threat-report PDF into `data/pdf/` | internet |
 
@@ -203,3 +208,26 @@ Treat these as indicative, not general benchmarks.
 Graph RAG limitation: the demo corpus (`data/graph/`) is tiny, so plain vector
 RAG answers its questions equally well; Graph RAG's multi-hop advantage needs a
 larger corpus. The graph is global (not tenant-scoped).
+
+## Change Data Capture (two levels)
+
+Keeps the Qdrant index current as the source data changes.
+
+| | Hash-based sync | Database CDC |
+|---|---|---|
+| Code | `src/cdc/pipeline_sync.py` | `src/cdc/consumer.py`, `debezium.py`, `source_db.py` |
+| Source | files in `data/tenants/<tenant>/` | Postgres table `documents` |
+| Detects changes by | content hash in a LlamaIndex docstore (polling: run `main.py sync`) | Postgres write-ahead log read by Debezium, streamed through Kafka (event-driven) |
+| Delivery | re-embeds only new/changed documents; deletes removed ones (`UPSERTS_AND_DELETE`) | each INSERT/UPDATE/DELETE becomes a Kafka event; offsets are committed only after Qdrant is updated (at-least-once, idempotent) |
+| Collection | `rag_synced` | `rag_cdc` |
+
+Both write into a multi-tenant collection (`tenant_id` payload). Start the CDC
+stack with `docker compose --profile cdc up -d` (Postgres with
+`wal_level=logical` on :5433, Kafka KRaft on :9094, Debezium Connect on :8083;
+needs `POSTGRES_PASSWORD` in `.env`), then `python main.py cdc-demo`.
+
+Limitations: only Qdrant is kept in sync. The Neo4j knowledge graph is not
+updated by either path (changed documents would need re-extraction). The CDC
+stack is memory-hungry (two JVMs capped at 512 MB each) and is behind a
+compose profile so the base stack stays light. The Kafka consumer is a single
+process (no scaling or dead-letter handling).
