@@ -50,9 +50,31 @@ def run_retrieval(_args) -> None:
           f"{best['extra_llm_calls_per_query']} extra LLM call(s)/query)")
 
 
+def run_cutoff(_args) -> None:
+    from src.evaluation.recall import sweep_similarity_cutoff
+    from src.indexing.qdrant_store import attach_qdrant_index, build_qdrant_index, get_qdrant_client
+    from src.loaders import load_csv, load_json, load_pdfs, load_text
+
+    configure_llamaindex_settings(normalize=True)
+    client = get_qdrant_client()
+    from llama_index.core import Settings
+
+    dim = len(Settings.embed_model.get_text_embedding("dimension probe"))
+    existing = client.get_collection("recall_eval").config.params.vectors.size if client.collection_exists("recall_eval") else None
+    if existing == dim:  # reuse only when built with the same embedding model
+        index = attach_qdrant_index("recall_eval", client)
+    else:
+        data = Path(__file__).resolve().parents[1] / "data"
+        docs = load_text(data / "text") + load_json(data / "json") + load_csv(data / "csv") + load_pdfs(data / "pdf")
+        index = build_qdrant_index(docs, "recall_eval", normalized=True, quantization="scalar")
+    rows, best = sweep_similarity_cutoff(index)
+    print(pd.DataFrame(rows).to_string(index=False))
+    print(f"\nRecommended similarity_cutoff = {best} (lowest cutoff that removes out-of-scope noise without losing recall)")
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("mode", choices=["ann", "retrieval", "all"])
+    p.add_argument("mode", choices=["ann", "retrieval", "cutoff", "all"])
     p.add_argument("--target", type=float, default=0.95)
     p.add_argument("--n", type=int, default=20000)
     p.add_argument("--dim", type=int, default=1536)
@@ -61,3 +83,5 @@ if __name__ == "__main__":
         run_ann(a)
     if a.mode in ("retrieval", "all"):
         run_retrieval(a)
+    if a.mode in ("cutoff", "all"):
+        run_cutoff(a)

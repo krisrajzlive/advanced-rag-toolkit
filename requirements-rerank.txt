@@ -1,0 +1,2 @@
+# Optional: local cross-encoder reranker (pulls CPU PyTorch, ~250 MB)
+sentence-transformers

@@ -1,3 +1,4 @@
+from src.retrieval import postprocessors  # noqa: F401
 from src.retrieval.query_expansion import build_query_expansion_retriever
 from src.retrieval.recursive_retrieval import build_recursive_retriever
 from src.retrieval.reranking import build_reranked_query_engine

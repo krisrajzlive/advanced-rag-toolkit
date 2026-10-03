@@ -350,7 +350,26 @@ def cmd_cdc_demo(_args: argparse.Namespace) -> None:
         source_db.delete_doc(row_id)
 
 
+def cmd_postprocess(args: argparse.Namespace) -> None:
+    from src.config import configure_llamaindex_settings
+    from src.indexing.qdrant_store import build_qdrant_index
+    from src.retrieval.postprocessors import compare_chains, sentence_window_parser
+
+    configure_llamaindex_settings(normalize=True)
+    docs = load_all_documents_light()
+    index = build_qdrant_index(docs, "postproc_eval", normalized=True)
+    window_index = build_qdrant_index(
+        docs, "postproc_window", normalized=True, transformations=[sentence_window_parser(3)]
+    )
+    for name, nodes in compare_chains(index, window_index, args.query).items():
+        print(f"\n--- {name}: {len(nodes)} node(s)")
+        for n in nodes[:4]:
+            snippet = n.node.get_content().replace("\n", " ")[:110]
+            print(f"  [{n.score if n.score is not None else float('nan'):.3f}] {snippet}")
+
+
 COMMANDS = {
+    "postprocess": (cmd_postprocess, True),
     "sync": (cmd_sync, False),
     "cdc-setup": (cmd_cdc_setup, False),
     "cdc-consume": (cmd_cdc_consume, False),

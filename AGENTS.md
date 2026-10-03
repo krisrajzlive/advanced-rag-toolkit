@@ -30,6 +30,9 @@ wires those functions together; it should stay thin.
 - Tenant identity comes only from a verified Keycloak JWT (`src/tenancy/auth.py`), never from caller-supplied values.
 - CDC paths (`src/cdc/`) use LlamaIndex `IngestionPipeline` and Debezium/Kafka only; commit Kafka offsets after the Qdrant write, keep apply/delete idempotent.
 - Parallel ingestion uses only `IngestionPipeline` options (`embed_batch_size`, async `arun` + embed `num_workers`, `run(num_workers=)`); no hand-rolled threading/multiprocessing. Entry points using worker processes need an `if __name__ == "__main__"` guard (Windows spawn).
+- Postprocessors are LlamaIndex-native (`src/retrieval/postprocessors.py`); apply the similarity cutoff before a reranker, and run chains on node copies (rerankers mutate scores). The cross-encoder is an optional dependency (`requirements-rerank.txt`).
+- Embedding provider is chosen only via `EMBED_PROVIDER` in `src/config.py`; never mix vectors from different models in one collection (`ensure_collection` enforces the dimension). Re-calibrate similarity cutoffs per model.
+- Loaders that call metered APIs go through `src/loaders/cache.py` (cache + skip-on-failure).
 - Every loader returns `list[llama_index.core.schema.Document]` and tags
   `metadata["modality"]`. Keep that contract when adding a new loader so it
   composes with the rest of the pipeline unmodified.

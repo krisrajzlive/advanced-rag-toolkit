@@ -20,6 +20,8 @@ from pathlib import Path
 
 from llama_index.core.schema import Document
 
+from src.loaders.cache import cached_text
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 DEFAULT_HF_CAPTION_MODEL = "Salesforce/blip-image-captioning-large"
@@ -62,7 +64,9 @@ def load_images(directory: str | Path) -> list[Document]:
         if path.suffix.lower() not in IMAGE_EXTS:
             continue
 
-        caption = _caption_locally(path) or _caption_via_hf_inference(path)
+        caption = cached_text(
+            path, "caption", lambda p=path: _caption_locally(p) or _caption_via_hf_inference(p)
+        )
         if not caption:
             continue
 

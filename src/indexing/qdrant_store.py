@@ -43,6 +43,15 @@ def ensure_collection(
     """Create `name` with the requested HNSW / quantization / tenancy setup."""
     if client.collection_exists(name):
         if not recreate:
+            existing = client.get_collection(name).config.params.vectors
+            existing_dim = existing.size if hasattr(existing, "size") else None
+            if existing_dim is not None and existing_dim != dim:
+                raise ValueError(
+                    f"Collection '{name}' holds {existing_dim}-dimensional vectors but the current "
+                    f"embedding model produces {dim}. Embeddings from different models are not "
+                    f"comparable: delete the collection (and any sync state in .cdc_state/) or "
+                    f"switch EMBED_PROVIDER back."
+                )
             return
         client.delete_collection(name)
 

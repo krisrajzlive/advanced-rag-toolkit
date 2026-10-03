@@ -1,0 +1,4 @@
+# Optional: fully local embeddings (EMBED_PROVIDER=local or ollama)
+sentence-transformers
+llama-index-embeddings-huggingface
+llama-index-embeddings-ollama

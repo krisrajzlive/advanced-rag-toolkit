@@ -146,6 +146,7 @@ Every demo is a `python main.py <command> "<query>"` command; two helper scripts
 | `main.py agent-llamaindex "<q>"` / `agent-langchain "<q>"` | RAG agent in LlamaIndex / LangChain-LangGraph | LLM |
 | `main.py evaluate` | LangSmith evaluation (context recall + LLM judge) | LangSmith key |
 | `main.py normalize-demo` | Raw vs L2-normalized embeddings: vector norms and metric ranking agreement | embeddings |
+| `main.py postprocess "<q>"` | Shows what each postprocessor chain keeps for a question: raw top-10, similarity cutoff, cutoff + cross-encoder, + long-context reorder, and sentence-window replacement (no LLM calls) | Qdrant, embeddings, `requirements-rerank.txt` |
 | `main.py quant-bench` | Qdrant scalar / binary / product quantization: recall@10 and latency vs exact search | Docker (Qdrant) |
 | `main.py hnsw-bench` | Qdrant HNSW `m` / `ef_construct` / `hnsw_ef` sweep vs exact search | Docker (Qdrant) |
 | `main.py tenant-demo "<q>"` | Logs in alice, bob and carol via Keycloak, verifies each JWT, and runs tenant-isolated retrieval | Docker (Qdrant, Keycloak) |
@@ -158,7 +159,7 @@ Every demo is a `python main.py <command> "<query>"` command; two helper scripts
 | `main.py cdc-setup` | Creates the Postgres `documents` table and registers the Debezium connector | Docker `--profile cdc` |
 | `main.py cdc-consume [idle_seconds]` | Kafka consumer applying Debezium change events to Qdrant until idle | Docker `--profile cdc` |
 | `main.py cdc-demo` | End to end: INSERT / UPDATE / DELETE in Postgres, then shows the change reflected in tenant-filtered retrieval | Docker `--profile cdc` |
-| `scripts/tune_recall.py ann\|retrieval\|all` | Measures recall and recommends settings. `ann`: sweeps quantization / rescoring / `hnsw_ef` against exact search and picks the fastest config reaching `--target` (default 0.95; also `--n`, `--dim`). `retrieval`: compares top-k, smaller chunks, query expansion and LLM rerank on 10 labelled questions | Docker (Qdrant) |
+| `scripts/tune_recall.py ann\|retrieval\|cutoff\|all` | Measures recall and recommends settings. `ann`: sweeps quantization / rescoring / `hnsw_ef` against exact search and picks the fastest config reaching `--target` (default 0.95; also `--n`, `--dim`). `retrieval`: compares top-k, smaller chunks, query expansion, LLM rerank, cross-encoder rerank and sentence-window on 10 labelled questions. `cutoff`: sweeps `SimilarityPostprocessor` and recommends a cutoff that removes out-of-scope noise without losing recall | Docker (Qdrant) |
 | `scripts/parallel_ingest.py [--repeat N] [--workers W] [--async-workers A] [--only text]` | Times five ingestion strategies on the same documents (text, JSON, CSV, 154-page PDF, replicated `--repeat` times) into a fresh Qdrant collection: sequential baseline, larger embedding batches, async concurrent batches, async + larger batches, and worker processes (`IngestionPipeline.run(num_workers=...)`). Prints nodes/sec and speedup vs baseline | Docker (Qdrant), OpenAI key |
 | `scripts/download_anthropic_pdf.py` | Downloads the Anthropic threat-report PDF into `data/pdf/` | internet |
 
@@ -251,3 +252,50 @@ slower: on Windows each process is spawned and re-imports LlamaIndex, and the
 work is network-bound, not CPU-bound). Worker processes should only pay off for
 CPU-heavy transformations (e.g. local embedding models) on larger corpora.
 Free-tier rate limits cap how far concurrency can go.
+
+### Postprocessors
+
+`src/retrieval/postprocessors.py` (all LlamaIndex-native node postprocessors):
+
+| Postprocessor | Purpose |
+|---|---|
+| `SimilarityPostprocessor` | drops weak matches so the system can abstain on out-of-scope questions |
+| `SentenceTransformerRerank` | cross-encoder reranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`, local CPU, no LLM call); needs `pip install -r requirements-rerank.txt` |
+| `LongContextReorder` | best chunks first and last in the prompt ("lost in the middle") |
+| `MetadataReplacementPostProcessor` | sentence-window retrieval: embed sentences, return their surrounding window |
+
+Order matters: cutoff first (cosine scale), then the cross-encoder (which
+replaces scores with its own scale). Measured here: a cutoff of 0.20-0.35
+cut out-of-scope questions that still retrieved something from 100% to 0% with
+no loss of in-scope recall (0.40 starts losing recall). On the labelled set the
+cross-encoder matched the 0.9 baseline with **no LLM calls**, versus 0.8 for the
+LLM reranker with 2 calls; sentence-window scored 0.7 here (single-sentence
+embeddings lose to the PDF distractors), so it is not a default. Small
+labelled set (10 questions) - treat as indicative. Note: rerankers overwrite
+`NodeWithScore.score` in place, so `apply_chain` works on copies.
+
+## Choosing the embedding provider
+
+Set `EMBED_PROVIDER` in `.env` (chat LLMs are unaffected and stay on the cloud providers):
+
+| `EMBED_PROVIDER` | Model | Dim | Notes |
+|---|---|---|---|
+| unset / `openai` | `text-embedding-3-small` | 1536 | default when `OPENAI_API_KEY` is set |
+| `huggingface` | `all-MiniLM-L6-v2` via Inference API | 384 | metered credits (can return 402) |
+| `local` | `all-MiniLM-L6-v2` in-process (sentence-transformers) | 384 | no server, no network, ~300 MB RAM; `pip install -r requirements-local-embeddings.txt`. Measured: 100 texts in 0.26 s |
+| `ollama` | `nomic-embed-text` on a local Ollama | 768 | embeddings only; `keep_alive` (default 1m) unloads the model after use (~376 MB while loaded). `ollama pull nomic-embed-text`; Ollama Cloud does **not** serve embeddings |
+
+Rules when switching: vectors from different models are not comparable and
+dimensions differ, so an existing Qdrant collection is rejected with a clear
+error (`ensure_collection` checks the size) - delete it (and `.cdc_state/` for
+`sync`) or switch back. `scripts/tune_recall.py cutoff` rebuilds its eval
+collection automatically. Score scales differ per model (MiniLM scores run lower
+than OpenAI), so re-run `scripts/tune_recall.py cutoff` to recalibrate the
+similarity cutoff for the model you use.
+
+## Loader cache
+
+Transcripts (audio/video) and image captions come from metered APIs, so
+`src/loaders/cache.py` stores them in `.cache/loaders/` (git-ignored), keyed by
+file name + size + modified time. A failing provider call (e.g. exhausted
+credits) logs a warning and skips that file instead of aborting the load.

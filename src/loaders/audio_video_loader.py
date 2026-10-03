@@ -17,10 +17,15 @@ the Document text.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 from llama_index.core.schema import Document
+
+from src.loaders.cache import cached_text
+
+logger = logging.getLogger(__name__)
 
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv"}
@@ -66,8 +71,14 @@ def load_audio_video(directory: str | Path) -> list[Document]:
         if suffix not in AUDIO_EXTS and suffix not in VIDEO_EXTS:
             continue
 
-        transcript = _transcribe_locally(path) or _transcribe_via_hf_inference(path)
+        transcript = cached_text(
+            path, "transcript", lambda p=path: _transcribe_locally(p) or _transcribe_via_hf_inference(p)
+        )
         if not transcript:
+            logger.warning(
+                "No transcript for %s: install requirements-multimodal.txt or set HUGGINGFACE_API_KEY",
+                path.name,
+            )
             continue
 
         documents.append(

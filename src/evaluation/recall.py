@@ -138,7 +138,63 @@ def improve_retrieval_recall(index, llm, documents=None) -> list[dict]:
         ("query expansion (4 queries) -> top-5", expansion_wide.retrieve, 1),
         ("rerank: top-10 pool -> LLM rerank -> top-2", rerank, 2),
     ]
+    strategies += _postprocessor_strategies(index, base10, documents)
     return [
         {"strategy": name, "recall": round(measure_recall(fn), 2), "extra_llm_calls_per_query": cost}
         for name, fn, cost in strategies
     ]
+
+
+def _postprocessor_strategies(index, base10, documents):
+    """Cross-encoder rerank and sentence-window retrieval (no LLM calls)."""
+    from src.retrieval import postprocessors as pp
+
+    out = []
+    try:
+        ce = pp.cross_encoder_reranker(top_n=2)
+        out.append((
+            "cross-encoder rerank: top-10 pool -> top-2",
+            lambda q: pp.apply_chain([ce], base10.retrieve(q), q),
+            0,
+        ))
+    except ImportError:
+        pass  # optional dependency; see requirements-rerank.txt
+    if documents is not None:
+        from src.indexing.qdrant_store import build_qdrant_index
+
+        window = build_qdrant_index(
+            documents, "recall_eval_window", normalized=True, quantization="scalar",
+            transformations=[pp.sentence_window_parser(3)],
+        )
+        retriever = window.as_retriever(similarity_top_k=2)
+        replace = pp.window_replacement()
+        out.append((
+            "sentence-window (3): top-2 sentences -> windows",
+            lambda q: pp.apply_chain([replace], retriever.retrieve(q), q),
+            0,
+        ))
+    return out
+
+
+def sweep_similarity_cutoff(index, cutoffs=(0.0, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4), top_k: int = 5):
+    """Trade-off of `SimilarityPostprocessor`: in-scope recall vs out-of-scope noise.
+
+    Returns (rows, recommended_cutoff): the lowest cutoff that keeps in-scope
+    recall at its no-cutoff level while minimising out-of-scope answers. Taking
+    the low end of that plateau leaves a safety margin before recall drops.
+    """
+    from src.retrieval import postprocessors as pp
+
+    base = index.as_retriever(similarity_top_k=top_k)
+    rows = []
+    for cutoff in cutoffs:
+        retrieve = lambda q, c=cutoff: pp.apply_chain([pp.similarity_cutoff(c)], base.retrieve(q), q)
+        rows.append({
+            "cutoff": cutoff,
+            "in_scope_recall": round(measure_recall(retrieve), 2),
+            "out_of_scope_answered": round(pp.out_of_scope_rate(retrieve), 2),
+        })
+    full = rows[0]["in_scope_recall"]
+    safe = [r for r in rows if r["in_scope_recall"] >= full]
+    least_noise = min(r["out_of_scope_answered"] for r in safe)
+    return rows, min(r["cutoff"] for r in safe if r["out_of_scope_answered"] == least_noise)

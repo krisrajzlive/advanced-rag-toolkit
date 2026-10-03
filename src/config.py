@@ -23,6 +23,8 @@ load_dotenv()
 
 HF_CHAT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 HF_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+LOCAL_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"  # 384-d, ~90 MB, EMBED_PROVIDER=local
+OLLAMA_EMBED_MODEL = "nomic-embed-text"  # 768-d, ~274 MB, EMBED_PROVIDER=ollama (local server)
 OLLAMA_CHAT_MODEL = "gpt-oss:20b"
 OPENAI_CHAT_MODEL = "gpt-4o-mini"
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
@@ -114,9 +116,31 @@ def get_llamaindex_embed_model(
             inner=get_llamaindex_embed_model(provider, normalize=False, **embed_kwargs)
         )
 
+    embed_provider = os.environ.get("EMBED_PROVIDER", "").lower()
+    if embed_provider == "local":
+        # In-process sentence-transformers: no server, no network, no API quota.
+        from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+
+        batch = {"embed_batch_size": embed_kwargs["embed_batch_size"]} if "embed_batch_size" in embed_kwargs else {}
+        return HuggingFaceEmbedding(model_name=LOCAL_EMBED_MODEL, **batch)
+    if embed_provider == "ollama":
+        # Local Ollama used for embeddings only; keep_alive unloads the model
+        # shortly after use so it never sits in RAM.
+        from llama_index.embeddings.ollama import OllamaEmbedding
+
+        batch = {"embed_batch_size": embed_kwargs["embed_batch_size"]} if "embed_batch_size" in embed_kwargs else {}
+        return OllamaEmbedding(
+            model_name=os.environ.get("EMBED_OLLAMA_MODEL", OLLAMA_EMBED_MODEL),
+            base_url=os.environ.get("OLLAMA_LOCAL_URL", "http://localhost:11434"),
+            keep_alive=os.environ.get("EMBED_OLLAMA_KEEP_ALIVE", "1m"),
+            **batch,
+        )
+    if embed_provider not in ("", "openai", "huggingface"):
+        raise ValueError(f"Unknown EMBED_PROVIDER {embed_provider!r}; use openai, huggingface, local or ollama")
+
     provider = provider or get_llm_provider()
 
-    if os.environ.get("OPENAI_API_KEY"):
+    if embed_provider != "huggingface" and os.environ.get("OPENAI_API_KEY"):
         from llama_index.embeddings.openai import OpenAIEmbedding
 
         return OpenAIEmbedding(
