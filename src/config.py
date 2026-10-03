@@ -89,11 +89,15 @@ def get_llamaindex_llm(provider: str | None = None):
 
 
 @lru_cache(maxsize=None)
-def get_llamaindex_embed_model(provider: str | None = None, normalize: bool = False):
+def get_llamaindex_embed_model(
+    provider: str | None = None, normalize: bool = False, **embed_kwargs
+):
     """Return a llama_index embedding model for the given provider.
 
     With `normalize=True` the model is wrapped so every vector it returns is
     L2-normalized (unit length) - see `src/indexing/normalization.py`.
+    `embed_kwargs` (e.g. `embed_batch_size`, `num_workers`) are passed to the
+    OpenAI embedding model; see `src/ingestion/parallel.py`.
 
     Prefers OpenAI when `OPENAI_API_KEY` is set: `HuggingFaceInferenceAPIEmbedding`
     opens a brand-new asyncio event loop per embedding batch
@@ -107,7 +111,7 @@ def get_llamaindex_embed_model(provider: str | None = None, normalize: bool = Fa
         from src.indexing.normalization import L2NormalizedEmbedding
 
         return L2NormalizedEmbedding(
-            inner=get_llamaindex_embed_model(provider, normalize=False)
+            inner=get_llamaindex_embed_model(provider, normalize=False, **embed_kwargs)
         )
 
     provider = provider or get_llm_provider()
@@ -116,7 +120,9 @@ def get_llamaindex_embed_model(provider: str | None = None, normalize: bool = Fa
         from llama_index.embeddings.openai import OpenAIEmbedding
 
         return OpenAIEmbedding(
-            model=OPENAI_EMBED_MODEL, api_key=os.environ["OPENAI_API_KEY"]
+            model=OPENAI_EMBED_MODEL,
+            api_key=os.environ["OPENAI_API_KEY"],
+            **embed_kwargs,
         )
 
     # Hugging Face Inference API embeddings: free-tier fallback when no

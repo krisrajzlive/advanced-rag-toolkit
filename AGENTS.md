@@ -29,6 +29,7 @@ wires those functions together; it should stay thin.
 - **Quantization and HNSW are Qdrant-native only** (`src/indexing/quantization.py`, `hnsw.py` pass Qdrant config objects). Do not hand-write quantization or ANN-index algorithms.
 - Tenant identity comes only from a verified Keycloak JWT (`src/tenancy/auth.py`), never from caller-supplied values.
 - CDC paths (`src/cdc/`) use LlamaIndex `IngestionPipeline` and Debezium/Kafka only; commit Kafka offsets after the Qdrant write, keep apply/delete idempotent.
+- Parallel ingestion uses only `IngestionPipeline` options (`embed_batch_size`, async `arun` + embed `num_workers`, `run(num_workers=)`); no hand-rolled threading/multiprocessing. Entry points using worker processes need an `if __name__ == "__main__"` guard (Windows spawn).
 - Every loader returns `list[llama_index.core.schema.Document]` and tags
   `metadata["modality"]`. Keep that contract when adding a new loader so it
   composes with the rest of the pipeline unmodified.

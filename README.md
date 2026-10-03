@@ -62,6 +62,7 @@ src/
   retrieval/           # query expansion, reranking, recursive retrieval
   agents/              # LlamaIndex ReActAgent + LangChain/LangGraph agent
   evaluation/           # LangSmith evaluate() + recall measurement/tuning
+  ingestion/            # parallel ingestion strategies (batching, async, worker processes)
   cdc/                  # IngestionPipeline sync + Postgres/Debezium/Kafka CDC consumer
   tenancy/              # Keycloak JWT verification + tenant-filtered retrieval
   graph/                # Neo4j knowledge graph + Graph RAG
@@ -158,6 +159,7 @@ Every demo is a `python main.py <command> "<query>"` command; two helper scripts
 | `main.py cdc-consume [idle_seconds]` | Kafka consumer applying Debezium change events to Qdrant until idle | Docker `--profile cdc` |
 | `main.py cdc-demo` | End to end: INSERT / UPDATE / DELETE in Postgres, then shows the change reflected in tenant-filtered retrieval | Docker `--profile cdc` |
 | `scripts/tune_recall.py ann\|retrieval\|all` | Measures recall and recommends settings. `ann`: sweeps quantization / rescoring / `hnsw_ef` against exact search and picks the fastest config reaching `--target` (default 0.95; also `--n`, `--dim`). `retrieval`: compares top-k, smaller chunks, query expansion and LLM rerank on 10 labelled questions | Docker (Qdrant) |
+| `scripts/parallel_ingest.py [--repeat N] [--workers W] [--async-workers A] [--only text]` | Times five ingestion strategies on the same documents (text, JSON, CSV, 154-page PDF, replicated `--repeat` times) into a fresh Qdrant collection: sequential baseline, larger embedding batches, async concurrent batches, async + larger batches, and worker processes (`IngestionPipeline.run(num_workers=...)`). Prints nodes/sec and speedup vs baseline | Docker (Qdrant), OpenAI key |
 | `scripts/download_anthropic_pdf.py` | Downloads the Anthropic threat-report PDF into `data/pdf/` | internet |
 
 ## Tests
@@ -231,3 +233,21 @@ updated by either path (changed documents would need re-extraction). The CDC
 stack is memory-hungry (two JVMs capped at 512 MB each) and is behind a
 compose profile so the base stack stays light. The Kafka consumer is a single
 process (no scaling or dead-letter handling).
+
+### Parallel ingestion
+
+`scripts/parallel_ingest.py` (code in `src/ingestion/parallel.py`) compares the
+three LlamaIndex-native ways to speed up ingestion; embedding API round trips
+are the bottleneck, so I/O-level parallelism wins:
+
+- **Larger embedding batches** (`embed_batch_size`): fewer requests.
+- **Async embedding** (`pipeline.arun` + the embed model's `num_workers`): several batches in flight from one process. Needs an `AsyncQdrantClient`.
+- **Worker processes** (`pipeline.run(num_workers=N)`): splits nodes across spawned processes.
+
+Measured here (398 chunks, OpenAI `text-embedding-3-small`, local Qdrant,
+Windows): baseline 16.1 s; batch 100 4.0 s (4.0x); async x8 3.9 s (4.1x);
+async + batch 50 x 8 3.1 s (5.2x); 2 worker processes 18.7 s (0.86x, i.e.
+slower: on Windows each process is spawned and re-imports LlamaIndex, and the
+work is network-bound, not CPU-bound). Worker processes should only pay off for
+CPU-heavy transformations (e.g. local embedding models) on larger corpora.
+Free-tier rate limits cap how far concurrency can go.
