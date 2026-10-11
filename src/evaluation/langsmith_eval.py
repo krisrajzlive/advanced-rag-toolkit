@@ -104,6 +104,7 @@ def evaluate_rag_pipeline(
     examples: list[dict] | None = None,
     provider: str | None = None,
     experiment_prefix: str = "advanced-rag-toolkit",
+    max_concurrency: int | None = 4,
 ):
     """Run LangSmith evaluation over the RAG pipeline.
 
@@ -126,4 +127,5 @@ def evaluate_rag_pipeline(
         ],
         client=client,
         experiment_prefix=experiment_prefix,
+        max_concurrency=max_concurrency,  # run examples and evaluators in parallel threads
     )

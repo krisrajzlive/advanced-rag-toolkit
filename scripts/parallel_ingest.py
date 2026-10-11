@@ -3,6 +3,7 @@
     python scripts/parallel_ingest.py                 # all strategies
     python scripts/parallel_ingest.py --repeat 4      # bigger corpus (default 3)
     python scripts/parallel_ingest.py --workers 3     # worker processes to try
+    python scripts/parallel_ingest.py --sweep 1,2,4,8 # compare worker-process counts
     python scripts/parallel_ingest.py --only async    # strategies whose name contains "async"
 
 Corpus: text + JSON + CSV + the 154-page PDF, replicated --repeat times.
@@ -31,15 +32,23 @@ def main() -> None:
     p.add_argument("--repeat", type=int, default=3, help="corpus replication factor")
     p.add_argument("--workers", type=int, default=2, help="worker processes for the multiprocess strategy")
     p.add_argument("--async-workers", type=int, default=8, help="concurrent embedding batches")
+    p.add_argument("--sweep", default="", help="comma-separated worker-process counts to compare, e.g. 1,2,4,8")
     p.add_argument("--only", default="", help="run only strategies whose name contains this text")
     args = p.parse_args()
 
+    import psutil
+
     docs = load_text(DATA / "text") + load_json(DATA / "json") + load_csv(DATA / "csv") + load_pdfs(DATA / "pdf")
     docs = replicate(docs, args.repeat)
-    strategies = [s for s in default_strategies(args.workers, args.async_workers) if args.only in s.name]
+    sweep = tuple(int(n) for n in args.sweep.split(",") if n)
+    strategies = [s for s in default_strategies(args.workers, args.async_workers, sweep) if args.only in s.name]
     if args.only and strategies and not strategies[0].name.startswith("baseline"):
         strategies = [default_strategies()[0]] + strategies  # speedup needs the baseline
-    print(f"{len(docs)} documents, {len(strategies)} strategies\n")
+    print(
+        f"{len(docs)} documents, {len(strategies)} strategies; CPU cores: "
+        f"{psutil.cpu_count(logical=False)} physical / {psutil.cpu_count(logical=True)} logical "
+        "(size process pools to physical cores)\n"
+    )
     print(pd.DataFrame(benchmark(docs, strategies)).to_string(index=False))
 
 

@@ -160,7 +160,8 @@ Every demo is a `python main.py <command> "<query>"` command; two helper scripts
 | `main.py cdc-consume [idle_seconds]` | Kafka consumer applying Debezium change events to Qdrant until idle | Docker `--profile cdc` |
 | `main.py cdc-demo` | End to end: INSERT / UPDATE / DELETE in Postgres, then shows the change reflected in tenant-filtered retrieval | Docker `--profile cdc` |
 | `scripts/tune_recall.py ann\|retrieval\|cutoff\|all` | Measures recall and recommends settings. `ann`: sweeps quantization / rescoring / `hnsw_ef` against exact search and picks the fastest config reaching `--target` (default 0.95; also `--n`, `--dim`). `retrieval`: compares top-k, smaller chunks, query expansion, LLM rerank, cross-encoder rerank and sentence-window on 10 labelled questions. `cutoff`: sweeps `SimilarityPostprocessor` and recommends a cutoff that removes out-of-scope noise without losing recall | Docker (Qdrant) |
-| `scripts/parallel_ingest.py [--repeat N] [--workers W] [--async-workers A] [--only text]` | Times five ingestion strategies on the same documents (text, JSON, CSV, 154-page PDF, replicated `--repeat` times) into a fresh Qdrant collection: sequential baseline, larger embedding batches, async concurrent batches, async + larger batches, and worker processes (`IngestionPipeline.run(num_workers=...)`). Prints nodes/sec and speedup vs baseline | Docker (Qdrant), OpenAI key |
+| `scripts/parallel_ingest.py [--repeat N] [--workers W] [--sweep 1,2,4,8] [--async-workers A] [--only text]` | Times five ingestion strategies on the same documents (text, JSON, CSV, 154-page PDF, replicated `--repeat` times) into a fresh Qdrant collection: sequential baseline, larger embedding batches, async concurrent batches, async + larger batches, and worker processes (`IngestionPipeline.run(num_workers=...)`). Prints nodes/sec and speedup vs baseline | Docker (Qdrant), OpenAI key |
+| `scripts/parallel_query.py queries / subquestion / router / agent / eval / all [--concurrency N]` | Benchmarks parallel querying on three Qdrant indexes (RAG notes, vector-infra notes, 154-page report): sequential vs `aquery` + `asyncio.gather` vs semaphore-bounded gather; `SubQuestionQueryEngine` `use_async` off/on; `RouterQueryEngine` multi-select fan-out; `FunctionAgent` parallel tool calls; LangSmith `evaluate(max_concurrency)` 1 vs 4 | Docker (Qdrant), chat LLM (use `RAG_LLM_PROVIDER=openai`) |
 | `scripts/download_anthropic_pdf.py` | Downloads the Anthropic threat-report PDF into `data/pdf/` | internet |
 
 ## Tests
@@ -299,3 +300,62 @@ Transcripts (audio/video) and image captions come from metered APIs, so
 `src/loaders/cache.py` stores them in `.cache/loaders/` (git-ignored), keyed by
 file name + size + modified time. A failing provider call (e.g. exhausted
 credits) logs a warning and skips that file instead of aborting the load.
+
+### Parallel ingestion: updated results
+
+Same 398-chunk corpus, 8 physical / 16 logical cores, peak memory = this process plus workers:
+
+| Strategy | Time | Speedup | Peak RSS |
+|---|---|---|---|
+| baseline (sequential, batch 10) | 22.1 s | 1.0x | 416 MB |
+| larger batches (100) | 4.5 s | 4.9x | 429 MB |
+| async (8 concurrent batches) | 4.0 s | 5.5x | 433 MB |
+| async + batch 50 x 8 | 2.8 s | 7.9x | 438 MB |
+| **document batches gathered (50 docs, semaphore 4, batch 100)** | **2.5 s** | **8.8x** | 429 MB |
+| async + 2 worker processes | 11.3 s | 2.0x | 1121 MB |
+| 2 worker processes | 15.2 s | 1.5x | 1096 MB |
+| 4 worker processes | 15.4 s | 1.4x | 1665 MB |
+
+Worker processes help a little but cost 2.5-4x the memory, and going from 2 to 4 gave nothing:
+embedding is network-bound, so I/O concurrency (batching, async, gathered batches) wins.
+(The baseline varied between runs, 16-22 s, so compare strategies within one run.)
+
+### Parallel querying
+
+`src/retrieval/parallel_query.py`, `src/agents/parallel_tools_agent.py`, `scripts/parallel_query.py`.
+OpenAI as the chat LLM, 12 questions, medians of 3 for the engine comparisons:
+
+| Technique | Without | With | Speedup |
+|---|---|---|---|
+| `aquery` + `asyncio.gather` (12 in flight) | 19.2 s | 6.6 s | 2.9x |
+| bounded gather (semaphore 4) | 19.2 s | 10.6 s | 1.8x (rate-limit friendly) |
+| `SubQuestionQueryEngine(use_async=True)` | 11.1 s | 10.1 s | 1.1x |
+| `RouterQueryEngine` multi-select, `aquery` fan-out | 16.8 s | 12.1 s | 1.4x |
+| `FunctionAgent(allow_parallel_tool_calls=True)`, 3 tool calls | 16.1 s | 8.8 s | 1.8x |
+| LangSmith `evaluate(max_concurrency=4)`, 8 examples | 56.1 s | 33.9 s | 1.7x |
+
+Why the fan-out engines gain little: only the middle step (the sub-queries) runs in
+parallel; question generation and answer synthesis are still sequential LLM calls.
+Agent timings vary run to run with LLM behaviour.
+
+**Provider concurrency limits matter more than your code.** Ollama Cloud's free tier
+served 6 concurrent requests in 11.3 s (about one at a time); OpenAI served the same 6 in
+2.6 s. With Ollama Cloud, `gather` gave only 1.3x and per-query latency ballooned (14 s
+vs 2.6 s), so use a bounded semaphore sized to your provider's limit.
+
+### Choosing parallelism by runtime
+
+| Runtime | Use | Avoid |
+|---|---|---|
+| Laptop / VM / EC2 / ECS / GKE (fixed cores) | async + larger batches first; `num_workers` only for CPU-heavy transforms, sized to **physical** cores (`psutil.cpu_count(logical=False)`) | more workers than physical cores; burstable instances |
+| AWS Lambda / Cloud Functions | `asyncio.gather` / `use_async=True` only, `num_workers` <= 1 | `ProcessPoolExecutor` (no `/dev/shm`), long single-invocation ingestion (15-minute cap), local-mode vector stores |
+| Vercel / edge runtimes | async only | any Python worker processes |
+
+Rules of thumb: parallel workers multiply API calls, so cap concurrency with a
+semaphore or your provider's retry/backoff; process pools multiply memory
+(about 0.35-0.6 GB per worker here); below about 100 chunks setup overhead dominates.
+Async clients are required for async paths: `QdrantVectorStore` needs an
+`AsyncQdrantClient` (`src.indexing.qdrant_store.async_client_for` adds it for every
+server-backed index). `evaluate_rag_pipeline` now defaults to `max_concurrency=4`.
+Note: `llama-index-question-gen-openai` pins an older `llama-index-core`, so the
+sub-question engine uses core's `LLMQuestionGenerator` instead.

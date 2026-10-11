@@ -39,3 +39,6 @@ PyJWT[crypto]
 # CDC: Debezium/Kafka consumer + Postgres source
 confluent-kafka
 psycopg[binary]
+
+# Memory measurement for scripts/parallel_ingest.py
+psutil

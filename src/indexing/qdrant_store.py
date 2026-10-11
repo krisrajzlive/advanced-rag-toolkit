@@ -17,12 +17,23 @@ import os
 from llama_index.core import StorageContext, VectorStoreIndex
 from llama_index.core.schema import Document
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient, models
+from qdrant_client import AsyncQdrantClient, QdrantClient, models
 
 from src.indexing.hnsw import HnswParams, hnsw_config
 from src.indexing.quantization import quantization_config, wait_until_indexed
 
 TENANT_FIELD = "tenant_id"
+
+
+def async_client_for(client: QdrantClient) -> AsyncQdrantClient | None:
+    """Async twin of a server-backed client (needed for `aquery` / `arun`).
+
+    Local `:memory:` clients keep state in-process, so they have no async twin.
+    """
+    from qdrant_client.qdrant_remote import QdrantRemote
+
+    remote = getattr(client, "_client", None)
+    return AsyncQdrantClient(url=remote.rest_uri) if isinstance(remote, QdrantRemote) else None
 
 
 def get_qdrant_client() -> QdrantClient:
@@ -100,7 +111,7 @@ def build_qdrant_index(
         client, collection, dim, quantization=quantization, hnsw=hnsw,
         multitenant=multitenant, normalized=normalized, recreate=recreate,
     )
-    store = QdrantVectorStore(client=client, collection_name=collection)
+    store = QdrantVectorStore(client=client, aclient=async_client_for(client), collection_name=collection)
     index = VectorStoreIndex.from_documents(
         documents,
         storage_context=StorageContext.from_defaults(vector_store=store),
@@ -112,5 +123,6 @@ def build_qdrant_index(
 
 def attach_qdrant_index(collection: str, client: QdrantClient | None = None) -> VectorStoreIndex:
     """Open an existing collection as an index (no re-embedding)."""
-    store = QdrantVectorStore(client=client or get_qdrant_client(), collection_name=collection)
+    client = client or get_qdrant_client()
+    store = QdrantVectorStore(client=client, aclient=async_client_for(client), collection_name=collection)
     return VectorStoreIndex.from_vector_store(store)

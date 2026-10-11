@@ -39,17 +39,73 @@ class Strategy:
     embed_workers: int | None = None  # concurrent async batches (async mode)
     process_workers: int | None = None  # spawned processes (pipeline.run)
     use_async: bool = False
+    gather_batch_size: int | None = None  # split documents into batches run via asyncio.gather
+    gather_concurrency: int = 4  # semaphore bound for those batches
 
 
-def default_strategies(process_workers: int = 2, async_workers: int = 8) -> list[Strategy]:
+def default_strategies(
+    process_workers: int = 2, async_workers: int = 8, sweep: tuple[int, ...] = ()
+) -> list[Strategy]:
+    process_strategies = [Strategy(f"{n} worker processes", process_workers=n) for n in (sweep or (process_workers,))]
     return [
         Strategy("baseline (sequential, batch 10)"),
         Strategy("larger batches (batch 100)", embed_batch_size=100),
         Strategy(f"async ({async_workers} concurrent batches)", embed_workers=async_workers, use_async=True),
         Strategy(f"async + larger batches (50 x {async_workers})", embed_batch_size=50,
                  embed_workers=async_workers, use_async=True),
-        Strategy(f"{process_workers} worker processes", process_workers=process_workers),
+        Strategy("document batches gathered (50 docs, semaphore 4, batch 100)", embed_batch_size=100,
+                 use_async=True, gather_batch_size=50, gather_concurrency=4),
+        Strategy(f"async + {process_workers} worker processes", embed_batch_size=50,
+                 embed_workers=async_workers, process_workers=process_workers, use_async=True),
+        *process_strategies,
     ]
+
+
+def chunk_list(items: list, size: int) -> list[list]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
+class PeakRss:
+    """Context manager sampling peak resident memory (MB) of this process + children."""
+
+    def __enter__(self):
+        import threading
+
+        import psutil
+
+        self._psutil, self._proc = psutil, psutil.Process()
+        self.peak_mb, self._stop = 0.0, threading.Event()
+
+        def sample():
+            while not self._stop.is_set():
+                try:
+                    rss = self._proc.memory_info().rss + sum(
+                        c.memory_info().rss for c in self._proc.children(recursive=True)
+                    )
+                    self.peak_mb = max(self.peak_mb, rss / 1e6)
+                except self._psutil.Error:
+                    pass
+                self._stop.wait(0.05)
+
+        self._thread = threading.Thread(target=sample, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join()
+
+
+async def _gather_batches(pipeline, documents, batch_size, concurrency, process_workers):
+    """Run `pipeline.arun` over document batches concurrently, bounded by a semaphore."""
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def run(batch):
+        async with semaphore:
+            return await pipeline.arun(documents=batch, num_workers=process_workers)
+
+    results = await asyncio.gather(*[run(b) for b in chunk_list(documents, batch_size)])
+    return [node for batch_nodes in results for node in batch_nodes]
 
 
 def replicate(documents: list[Document], times: int) -> list[Document]:
@@ -86,12 +142,18 @@ def run_strategy(strategy: Strategy, documents: list[Document], client: QdrantCl
             collection_name=COLLECTION,
         ),
     )
-    start = time.perf_counter()
-    if strategy.use_async:
-        nodes = asyncio.run(pipeline.arun(documents=documents, num_workers=strategy.process_workers))
-    else:
-        nodes = pipeline.run(documents=documents, num_workers=strategy.process_workers)
-    seconds = time.perf_counter() - start
+    with PeakRss() as memory:
+        start = time.perf_counter()
+        if strategy.gather_batch_size:
+            nodes = asyncio.run(_gather_batches(
+                pipeline, documents, strategy.gather_batch_size, strategy.gather_concurrency,
+                strategy.process_workers,
+            ))
+        elif strategy.use_async:
+            nodes = asyncio.run(pipeline.arun(documents=documents, num_workers=strategy.process_workers))
+        else:
+            nodes = pipeline.run(documents=documents, num_workers=strategy.process_workers)
+        seconds = time.perf_counter() - start
 
     stored = client.count(COLLECTION, exact=True).count
     client.delete_collection(COLLECTION)
@@ -102,6 +164,7 @@ def run_strategy(strategy: Strategy, documents: list[Document], client: QdrantCl
         "nodes": len(nodes),
         "seconds": round(seconds, 1),
         "nodes_per_sec": round(len(nodes) / seconds, 1),
+        "peak_rss_mb": round(memory.peak_mb),
     }
 
 

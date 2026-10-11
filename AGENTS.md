@@ -33,6 +33,8 @@ wires those functions together; it should stay thin.
 - Postprocessors are LlamaIndex-native (`src/retrieval/postprocessors.py`); apply the similarity cutoff before a reranker, and run chains on node copies (rerankers mutate scores). The cross-encoder is an optional dependency (`requirements-rerank.txt`).
 - Embedding provider is chosen only via `EMBED_PROVIDER` in `src/config.py`; never mix vectors from different models in one collection (`ensure_collection` enforces the dimension). Re-calibrate similarity cutoffs per model.
 - Loaders that call metered APIs go through `src/loaders/cache.py` (cache + skip-on-failure).
+- Async paths (`aquery`, `arun`) need async-capable stores: build Qdrant vector stores through `src/indexing/qdrant_store.py` (adds `AsyncQdrantClient`). Bound concurrency with a semaphore; size process pools to physical cores; use async only on serverless.
+- Do not install `llama-index-question-gen-openai` (pins an older `llama-index-core` and downgrades `openai`); run `pip check` after adding packages.
 - Every loader returns `list[llama_index.core.schema.Document]` and tags
   `metadata["modality"]`. Keep that contract when adding a new loader so it
   composes with the rest of the pipeline unmodified.
